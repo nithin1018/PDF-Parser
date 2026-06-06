@@ -2,7 +2,7 @@ import fitz
 import json
 import re
 from collections import Counter
-
+import debug
 # --- Function to detect headings ---
 def get_headings(page):
     headings = []
@@ -100,6 +100,39 @@ def find_repeated_lines(all_pages_lines, repeat_threshold=0.6):
 
     return repeated
 
+# --- Function to check if a span of text is likely a watermark ---
+def is_watermark_span(span):
+    color = span.get("color", 0)  # default 0 = black
+
+    # Unpack the single color integer into R, G, B channels
+    r = (color >> 16) & 0xFF
+    g = (color >> 8)  & 0xFF
+    b =  color        & 0xFF
+
+    # Average brightness: 0 = black, 255 = white
+    brightness = (r + g + b) / 3
+
+    # If very light (almost white), treat as watermark
+    return brightness > 200
+
+# --- Get page text with watermark spans removed ---
+def get_text_without_watermarks(page):
+    data = page.get_text("dict")
+    clean_lines = []
+
+    for block in data["blocks"]:
+        if block["type"] != 0:  # 0 = text block
+            continue
+        for line in block["lines"]:
+            line_text = ""
+            for span in line["spans"]:
+                if not is_watermark_span(span):
+                    line_text += span["text"]
+            if line_text.strip():
+                clean_lines.append(line_text)
+
+    return "\n".join(clean_lines)
+
 # --- Main script ---
 doc = fitz.open("COMPILER DESIGN.pdf")
 
@@ -124,7 +157,10 @@ repeated_lines = find_repeated_lines(all_page_lines)
 print("Repeated lines found: ",repeated_lines)
 
 for i, page in enumerate(doc):
-    text = page.get_text("text")       
+
+    #debug.debug_watermark_spans(page, i+1)
+
+    text = get_text_without_watermarks(page)     
     lines = text.split("\n")
 
     cleaned_lines = []
