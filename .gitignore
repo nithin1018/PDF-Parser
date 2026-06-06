@@ -1,4 +1,4 @@
- myenv/
- .env
- *.pdf
- *.json
+myenv/
+.env
+*.pdf
+*.json
