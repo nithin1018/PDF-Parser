@@ -38,7 +38,7 @@ def has_images(page):
             return True
     return False
 
-def get_tables(page):
+def get_row_blocks(page, y_tolerance=3, gap_threshold=15):
     words = page.get_text("words")
     rows = {}
 
@@ -46,21 +46,90 @@ def get_tables(page):
         x0   = word[0]
         y0   = word[1]
         text = word[4]
-
-        y_key = round(y0 / 3) * 3
+        y_key = round(y0 / y_tolerance) * y_tolerance
 
         if y_key not in rows:
             rows[y_key] = []
-
         rows[y_key].append((x0, text))
 
-    result = []
-    for y_key in sorted(rows.keys()):
-        row_words = sorted(rows[y_key], key=lambda w: w[0])
-        row_text  = [w[1] for w in row_words]
-        result.append(row_text)
+    sorted_y_keys = sorted(rows.keys())
 
-    return result
+    blocks = []
+    current_block = []
+
+    for idx, y_key in enumerate(sorted_y_keys):
+        current_block.append((y_key, rows[y_key]))
+
+        if idx < len(sorted_y_keys) - 1:
+            next_y = sorted_y_keys[idx + 1]
+            gap = next_y - y_key
+
+            if gap > gap_threshold:
+                blocks.append(current_block)
+                current_block = []
+
+    if current_block:
+        blocks.append(current_block)
+
+    return blocks
+
+# --- Function to decide if a block of rows looks like a table ---
+def is_table_block(block, x_tolerance=50, min_rows=3, min_cols=2):
+    # block is a list of (y_key, [(x0, text), (x0, text), ...])
+
+    if len(block) < min_rows:
+        return False
+
+    # Collect every X position from every row in this block
+    all_x = []
+    for (y_key, word_list) in block:
+        for (x0, text) in word_list:
+            all_x.append(x0)
+
+    # Sort and cluster nearby X values into "columns"
+    # If X=48, X=50, X=51 all appear, they form one column at roughly X=50
+    all_x.sort()
+
+    columns = []
+    current_cluster = [all_x[0]]
+
+    for x in all_x[1:]:
+        if x - current_cluster[-1] <= x_tolerance:
+            # Close enough — same column
+            current_cluster.append(x)
+        else:
+            # Gap too big — new column starts
+            columns.append(current_cluster)
+            current_cluster = [x]
+    columns.append(current_cluster)
+
+    # A real column appears in MANY rows, not just once or twice
+    strong_columns = [c for c in columns if len(c) >= min_rows]
+
+    return len(strong_columns) >= min_cols
+
+
+# --- Main function: separate tables from prose ---
+def get_tables_and_prose(page):
+    blocks = get_row_blocks(page)
+
+    tables = []
+    prose_blocks = []
+
+    for block in blocks:
+        # Convert block rows into clean word lists for output
+        rows_as_text = []
+        for (y_key, word_list) in block:
+            sorted_words = sorted(word_list, key=lambda w: w[0])
+            rows_as_text.append([w[1] for w in sorted_words])
+
+        if is_table_block(block):
+            tables.append(rows_as_text)
+        else:
+            prose_blocks.append(rows_as_text)
+
+    return tables, prose_blocks
+
 
 # --- Function to detect page number lines ---
 def is_page_number(text):
@@ -82,6 +151,9 @@ def find_repeated_lines(all_pages_lines, repeat_threshold=0.6):
     total_pages = len(all_pages_lines)
     line_counts = Counter()
 
+    if total_pages < 3:
+        return set()
+    
     for page_lines in all_pages_lines:
         # Convert to a set so each line is counted only ONCE per page
         # even if it appears twice on the same page
@@ -175,12 +247,15 @@ for i, page in enumerate(doc):
 
     cleaned_text = "\n".join(cleaned_lines).strip()
 
+    tables, prose_block = get_tables_and_prose(page)
+
     page_data = {
         "page_number": i + 1,
         "text":        cleaned_text,
         "headings":    get_headings(page),   # NEW
         "has_images":  has_images(page),      # NEW
-        "table_rows": get_tables(page)
+        "tables": tables,
+        "prose_blocks": prose_block
     }
 
     result["pages"].append(page_data)
